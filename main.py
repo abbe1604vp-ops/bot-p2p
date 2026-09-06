@@ -8,7 +8,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 # --- CONFIGURACIÓN ---
-TELEGRAM_BOT_TOKEN = "6327813571:AAGcRK1xNEVy9xqC2SHqQxZiK7I1sOzq89I"
+TELEGRAM_BOT_TOKEN = "6327813571:AAEAE3krNicCNiB3f7Ve8N9SMF52BchmClY"
 CHAT_ID_NOTIFICACIONES = None
 
 FIAT = "VES"
