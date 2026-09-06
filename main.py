@@ -17,7 +17,7 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "TU_TOKEN_AQUI")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "6327813571:AAFeaShFa5UsP3IN73rtfcn5Lv_PMI953Yc")
 
 # Historial global de precios
 PRICE_HISTORY = []
