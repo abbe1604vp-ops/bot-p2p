@@ -14,71 +14,71 @@ logging.basicConfig(
 # --- VARIABLE DE ENTORNO ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# --- CONSULTA P2P BINANCE BANCO DE VENEZUELA ---
+# --- CONSULTA ROBUSTA DE DÓLAR P2P / PARALELO VENEZUELA ---
 def get_p2p_price():
-    # Usamos una API abierta directa conectada a Binance P2P VES
-    url = "https://ve.dolarapi.com/v1/dolares/oficial" # Endpoint de respaldo ligero
-    url_binance = "https://pydolarvenezuela-api.vercel.app/api/v1/dollar/unit/binance"
+    """Consulta múltiples fuentes abiertas optimizadas para servidores Cloud."""
     
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/json"
-    }
-
+    # Fuente 1: DolarApi (P2P / Paralelo)
     try:
-        # Intentamos obtener la tasa exacta de Binance
-        res = requests.get(url_binance, headers=headers, timeout=10)
+        res = requests.get("https://ve.dolarapi.com/v1/dolares/paralelo", timeout=5)
         if res.status_code == 200:
             data = res.json()
-            price = float(data.get("price", 0.0))
-            if price > 0:
-                return price
+            precio = float(data.get("promedio", 0.0))
+            if precio > 0:
+                return precio
     except Exception as e:
-        logging.error(f"Error en endpoint primario: {e}")
+        logging.error(f"Error en DolarApi Paralelo: {e}")
 
-    # Método de respaldo secundario directo
+    # Fuente 2: CriptoYa (Binance P2P VES directo por API pública autorizada)
     try:
-        res_backup = requests.get("https://monitordolarvenezuela.com/api/v1/dollar", headers=headers, timeout=10)
-        if res_backup.status_code == 200:
-            data_b = res_backup.json()
-            # Buscar el monitor de Binance
-            for item in data_b.get("monitors", []):
-                if "binance" in item.get("key", "").lower():
-                    return float(item.get("price", 0.0))
+        res = requests.get("https://criptoya.com/api/binancep2p/sell/usdt/ves/5", timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            if isinstance(data, list) and len(data) > 0:
+                precio = float(data[0].get("price", 0.0))
+                if precio > 0:
+                    return precio
     except Exception as e:
-        logging.error(f"Error en endpoint de respaldo: {e}")
+        logging.error(f"Error en CriptoYa P2P: {e}")
+
+    # Fuente 3: Exchangerate API Respaldo
+    try:
+        res = requests.get("https://ve.dolarapi.com/v1/dolares", timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            for item in data:
+                if item.get("fuente") == "paralelo":
+                    return float(item.get("promedio", 0.0))
+    except Exception as e:
+        logging.error(f"Error en DolarApi Lista: {e}")
 
     return 0.0
 
 # --- COMANDOS DE TELEGRAM ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 *Bot P2P Binance (Banco de Venezuela)*\n\n"
-        "Envía el comando `/status` para obtener la tasa P2P en tiempo real.",
+        "🤖 *Bot P2P Binance / Mercado Venezuela*\n\n"
+        "Envía el comando `/status` para obtener la tasa en tiempo real.",
         parse_mode="Markdown"
     )
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg_wait = await update.message.reply_text("🔄 Consultando tasa en tiempo real...")
+    msg_wait = await update.message.reply_text("🔄 Consultando tasa de cambio...")
     
     price = get_p2p_price()
 
     if price > 0:
         respuesta = (
-            f"📊 *TASA BINANCE P2P (VES)*\n"
+            f"📊 *TASA DE CAMBIO P2P / MERCADO (VES)*\n"
             f"──────────────────────────────\n"
             f"💵 *Precio USDT:* `{price} VES`\n"
-            f"🏛️ *Método:* `Banco de Venezuela`\n"
+            f"🏛️ *Método:* `Banco de Venezuela / P2P`\n"
             f"──────────────────────────────\n"
             f"⏰ *Actualizado:* `{datetime.now().strftime('%I:%M:%S %p')}`"
         )
         await msg_wait.edit_text(respuesta, parse_mode="Markdown")
     else:
-        await msg_wait.edit_text(
-            "⚠️ *Servidor de Binance no respondió.*\n"
-            "Por favor, intenta enviar `/status` nuevamente en 10 segundos.",
-            parse_mode="Markdown"
-        )
+        await msg_wait.edit_text("❌ No se pudo conectar con los servidores de tasa. Intenta en un momento.")
 
 # --- INICIALIZACIÓN ---
 def main():
