@@ -2,6 +2,7 @@ import os
 import logging
 import requests
 import json
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
@@ -14,13 +15,69 @@ logging.basicConfig(
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 USER_CHAT_IDS = set()
 
-# Historial para almacenar lecturas del día
-PRECIO_HISTORY = []
+DB_NAME = "p2p_data.db"
 
+# ---------------------------------------------------------
+# FUNCIONES DE BASE DE DATOS (SQLITE)
+# ---------------------------------------------------------
+def init_db():
+    """Crea la tabla de historial si no existe."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS historial (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            fecha TEXT NOT NULL,
+            hora TEXT NOT NULL,
+            compra REAL NOT NULL,
+            venta REAL NOT NULL,
+            spread REAL NOT NULL
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def guardar_registro(compra, venta, spread):
+    """Inserta una nueva lectura de precios en la base de datos."""
+    now_ve = get_venezuela_time()
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO historial (timestamp, fecha, hora, compra, venta, spread)
+        VALUES (?, ?, ?, ?, ?, ?)
+    ''', (
+        now_ve.isoformat(),
+        now_ve.strftime("%Y-%m-%d"),
+        now_ve.strftime("%I:%M %p"),
+        compra,
+        venta,
+        spread
+    ))
+    conn.commit()
+    conn.close()
+
+def obtener_historial_reciente(limite=300):
+    """Obtiene las últimas lecturas almacenadas para análisis y gráficos."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT hora, compra, venta, spread, fecha FROM historial
+        ORDER BY id DESC LIMIT ?
+    ''', (limite,))
+    registros = cursor.fetchall()
+    conn.close()
+    
+    # Invertir para orden cronológico
+    return list(reversed(registros))
+
+# ---------------------------------------------------------
+# CONSULTA DE APIS DE PRECIO
+# ---------------------------------------------------------
 def get_p2p_price():
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     
-    # Fuente 1: CriptoYa (Filtro Banco de Venezuela / P2P)
+    # Fuente 1: CriptoYa (P2P BDV)
     try:
         url = "https://criptoya.com/api/binancep2p/usdt/ves/1"
         res = requests.get(url, headers=headers, timeout=8)
@@ -52,10 +109,13 @@ def get_venezuela_time():
     tz_ve = timezone(timedelta(hours=-4))
     return datetime.now(tz_ve)
 
+# ---------------------------------------------------------
+# COMPONENTES VISUALES Y CÁLCULOS
+# ---------------------------------------------------------
 def generate_chart_url(history):
-    labels = [h["hora"] for h in history[-12:]]
-    data_compra = [h["compra"] for h in history[-12:]]
-    data_venta = [h["venta"] for h in history[-12:]]
+    labels = [h[0] for h in history[-15:]]
+    data_compra = [h[1] for h in history[-15:]]
+    data_venta = [h[2] for h in history[-15:]]
 
     chart_config = {
         "type": "line",
@@ -67,34 +127,27 @@ def generate_chart_url(history):
             ]
         },
         "options": {
-            "title": {"display": True, "text": "Mercado Binance P2P BDV"},
+            "title": {"display": True, "text": "Histórico Guardado Binance P2P BDV"},
             "scales": {"yAxes": [{"ticks": {"beginAtZero": False}}]}
         }
     }
     chart_json = json.dumps(chart_config)
     return f"https://quickchart.io/chart?c={requests.utils.quote(chart_json)}&w=500&h=300&bkg=white"
 
-def calcular_prediccion():
-    """
-    Realiza un análisis de tendencia comparando el promedio reciente con el inicial.
-    Retorna la dirección (alcista/bajista) y proyecciones a futuro.
-    """
-    if len(PRECIO_HISTORY) < 2:
-        return "neutral", 0.0, []
+def calcular_prediccion_db(history):
+    if len(history) < 2:
+        return "NEUTRAL 🟡", 0.0, []
 
-    compras = [h["compra"] for h in PRECIO_HISTORY]
-    ventas = [h["venta"] for h in PRECIO_HISTORY]
+    compras = [h[1] for h in history]
+    ventas = [h[2] for h in history]
 
-    # Diferencial de cambio promedio por intervalo
     n = len(compras)
     delta_c = (compras[-1] - compras[0]) / n
     delta_v = (ventas[-1] - ventas[0]) / n
 
-    # Tendencia general
     tendencia = "ALCISTA 🟢" if delta_c >= 0 else "BAJISTA 🔴"
 
-    # Horas a proyectar: +1h, +3h, +6h, +12h (Asumiendo intervalos de lectura)
-    horas_proyeccion = []
+    proyecciones = []
     horizontes = [("1h", 20), ("3h", 60), ("6h", 120), ("12h", 240)]
 
     for h_label, pasos in horizontes:
@@ -104,7 +157,7 @@ def calcular_prediccion():
         flecha_c = "↗️ 🟢" if delta_c >= 0 else "↘️ 🔴"
         flecha_v = "↗️ 🟢" if delta_v >= 0 else "↘️ 🔴"
 
-        horas_proyeccion.append({
+        proyecciones.append({
             "hora": h_label,
             "compra": pred_compra,
             "flecha_c": flecha_c,
@@ -112,21 +165,24 @@ def calcular_prediccion():
             "flecha_v": flecha_v
         })
 
-    return tendencia, round(delta_c, 3), horas_proyeccion
+    return tendencia, round(delta_c, 3), proyecciones
 
+# ---------------------------------------------------------
+# COMANDOS DE TELEGRAM
+# ---------------------------------------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     USER_CHAT_IDS.add(update.effective_chat.id)
     await update.message.reply_text(
-        "🤖 *Bot Binance P2P BDV - Predicción de Mercado*\n\n"
+        "🤖 *Bot Binance P2P con Base de Datos SQL*\n\n"
         "• `/status` : Precios actualizados y spread.\n"
-        "• `/grafico` : Gráfico de techos y pisos.\n"
-        "• `/prediccion` : Análisis del mercado y proyección por horas.",
+        "• `/grafico` : Histórico dinámico desde la BD.\n"
+        "• `/prediccion` : Análisis de tendencia basado en lecturas guardadas.",
         parse_mode="Markdown"
     )
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     USER_CHAT_IDS.add(update.effective_chat.id)
-    msg_wait = await update.message.reply_text("🔄 Consultando Binance P2P (BDV)...")
+    msg_wait = await update.message.reply_text("🔄 Consultando Binance P2P BDV...")
     
     sell_p, buy_p = get_p2p_price()
     if sell_p > 0 and buy_p > 0:
@@ -142,7 +198,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"──────────────────────────────\n"
             f"📐 *Spread:* `{spread_ves} VES` (`{spread_porcentaje}%`)\n"
             f"⏰ *Hora:* `{hora_ve}`\n\n"
-            f"🔮 Consulta `/prediccion` para ver la tendencia a futuro."
+            f"💾 *Registro guardado en base de datos.*"
         )
         await msg_wait.edit_text(respuesta, parse_mode="Markdown")
     else:
@@ -150,24 +206,24 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def prediccion(update: Update, context: ContextTypes.DEFAULT_TYPE):
     USER_CHAT_IDS.add(update.effective_chat.id)
+    history = obtener_historial_reciente(limite=200)
 
-    if len(PRECIO_HISTORY) < 3:
-        await update.message.reply_text("⏳ El bot necesita acumular más datos en memoria (aprox. 5 a 10 min) para realizar el análisis de tendencia. Intenta nuevamente en breve.")
+    if len(history) < 3:
+        await update.message.reply_text("⏳ Esperando más registros en la base de datos para realizar la predicción...")
         return
 
-    msg_wait = await update.message.reply_text("🧠 Analizando la tendencia del mercado P2P BDV...")
+    msg_wait = await update.message.reply_text("🧠 Consultando BD y analizando tendencia...")
 
-    tendencia, ritmo, proyecciones = calcular_prediccion()
-    ultimo_reg = PRECIO_HISTORY[-1]
-    hora_actual = ultimo_reg["hora"]
+    tendencia, ritmo, proyecciones = calcular_prediccion_db(history)
+    hora_actual = history[-1][0]
 
     texto_prediccion = (
-        f"🔮 *PREDICCIÓN DE MERCADO P2P (BANCO DE VENEZUELA)*\n"
+        f"🔮 *PREDICCIÓN BASADA EN HISTORIAL (BD)*\n"
         f"──────────────────────────────\n"
-        f"⏰ *Hora del Análisis:* `{hora_actual}`\n"
-        f"📊 *Tendencia Actual:* *{tendencia}*\n"
+        f"⏰ *Última Lectura BD:* `{hora_actual}`\n"
+        f"📊 *Tendencia Base:* *{tendencia}*\n"
         f"──────────────────────────────\n"
-        f"📌 *PROYECCIÓN DE PRECIOS POR HORAS:*\n\n"
+        f"📌 *PROYECCIÓN RESTO DEL DÍA:*\n\n"
     )
 
     for p in proyecciones:
@@ -177,33 +233,31 @@ async def prediccion(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"  🔴 Vender: `{p['venta']} VES` {p['flecha_v']}\n\n"
         )
 
-    texto_prediccion += (
-        f"──────────────────────────────\n"
-        f"💡 *Nota:* La proyección se calcula mediante análisis de aceleración lineal del libro de órdenes P2P en el Banco de Venezuela."
-    )
-
+    texto_prediccion += "💾 *Análisis generado con datos persistentes en SQLite.*"
     await msg_wait.edit_text(texto_prediccion, parse_mode="Markdown")
 
 async def grafico(update: Update, context: ContextTypes.DEFAULT_TYPE):
     USER_CHAT_IDS.add(update.effective_chat.id)
-    if len(PRECIO_HISTORY) < 2:
-        await update.message.reply_text("⏳ Recopilando datos... Intenta en un par de minutos.")
+    history = obtener_historial_reciente(limite=100)
+
+    if len(history) < 2:
+        await update.message.reply_text("⏳ Base de datos inicializándose... Intenta de nuevo en unos minutos.")
         return
 
-    msg_wait = await update.message.reply_text("📊 Generando gráfico...")
+    msg_wait = await update.message.reply_text("📊 Consultando BD y generando gráfico...")
 
-    compras = [h["compra"] for h in PRECIO_HISTORY]
-    ventas = [h["venta"] for h in PRECIO_HISTORY]
-    ultimo_registro = PRECIO_HISTORY[-1]
+    compras = [h[1] for h in history]
+    ventas = [h[2] for h in history]
+    ultima_hora = history[-1][0]
 
-    chart_url = generate_chart_url(PRECIO_HISTORY)
+    chart_url = generate_chart_url(history)
 
     caption_text = (
-        f"📈 *TECHO Y PISO DEL DÍA (BDV)*\n"
+        f"📈 *ANÁLISIS DESDE BASE DE DATOS*\n"
         f"──────────────────────────────\n"
-        f"🏔️ *Techo:* Comprar `{max(compras)} VES` | Vender `{max(ventas)} VES`\n"
-        f"🏕️ *Piso:* Comprar `{min(compras)} VES` | Vender `{min(ventas)} VES`\n"
-        f"⏰ *Hora:* `{ultimo_registro['hora']}`"
+        f"🏔️ *Techo Histórico:* Comprar `{max(compras)} VES` | Vender `{max(ventas)} VES`\n"
+        f"🏕️ *Piso Histórico:* Comprar `{min(compras)} VES` | Vender `{min(ventas)} VES`\n"
+        f"⏰ *Hora:* `{ultima_hora}`"
     )
 
     try:
@@ -211,26 +265,25 @@ async def grafico(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg_wait.delete()
     except Exception as e:
         logging.error(f"Error gráfico: {e}")
-        await msg_wait.edit_text("❌ Error al renderizar la imagen.")
+        await msg_wait.edit_text("❌ Error al renderizar la imagen desde la BD.")
 
+# ---------------------------------------------------------
+# TAREA EN SEGUNDO PLANO (MONITOREO + ALERTA + GUARDADO)
+# ---------------------------------------------------------
 async def background_monitoring(context: ContextTypes.DEFAULT_TYPE):
     sell_p, buy_p = get_p2p_price()
     if sell_p > 0 and buy_p > 0:
+        spread_ves = round(abs(sell_p - buy_p), 2)
         now_ve = get_venezuela_time()
         hora_str = now_ve.strftime("%I:%M %p")
 
-        PRECIO_HISTORY.append({
-            "hora": hora_str,
-            "compra": sell_p,
-            "venta": buy_p,
-            "timestamp": now_ve
-        })
+        # 1. Guardar en SQLite
+        try:
+            guardar_registro(sell_p, buy_p, spread_ves)
+        except Exception as e:
+            logging.error(f"Error al guardar en DB: {e}")
 
-        if len(PRECIO_HISTORY) > 288:
-            PRECIO_HISTORY.pop(0)
-
-        # Alerta automática cuando el spread sea >= 10 VES
-        spread_ves = round(abs(sell_p - buy_p), 2)
+        # 2. Enviar Alertas de Spread >= 10 VES
         if spread_ves >= 10.0:
             for chat_id in USER_CHAT_IDS:
                 try:
@@ -253,6 +306,9 @@ def main():
         logging.error("No se encontró TELEGRAM_BOT_TOKEN.")
         return
 
+    # Inicializar Base de Datos
+    init_db()
+
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
@@ -260,10 +316,11 @@ def main():
     app.add_handler(CommandHandler("grafico", grafico))
     app.add_handler(CommandHandler("prediccion", prediccion))
 
+    # Guardar en base de datos cada 3 minutos (180 segundos)
     if app.job_queue:
         app.job_queue.run_repeating(background_monitoring, interval=180, first=5)
 
-    print("🚀 Bot iniciado con módulo de predicción...")
+    print("🚀 Bot iniciado con persistencia de Base de Datos SQLite...")
     app.run_polling()
 
 if __name__ == "__main__":
