@@ -23,36 +23,30 @@ def get_p2p_price():
         res = requests.get(url, headers=headers, timeout=8)
         if res.status_code == 200:
             data = res.json()
-            ask = float(data.get("ask", 0.0))  # Precio Venta / Comprar
-            bid = float(data.get("bid", 0.0))  # Precio Recompra / Vender
+            ask = float(data.get("ask", 0.0))  # Comprar USDT (Venta)
+            bid = float(data.get("bid", 0.0))  # Vender USDT (Recompra)
             if ask > 0 and bid > 0:
                 return round(ask, 2), round(bid, 2)
     except Exception as e:
         logging.error(f"Error Fuente 1 CriptoYa: {e}")
 
-    # Fuente 2: DolarApi Venezuela
+    # Fuente 2: DolarApi (Respaldo)
     try:
         url2 = "https://ve.dolarapi.com/v1/dolares/p2p/binance"
         res2 = requests.get(url2, headers=headers, timeout=8)
         if res2.status_code == 200:
             data2 = res2.json()
-            compra = float(data2.get("promedio", data2.get("compra", 0.0)))
-            if compra > 0:
-                return round(compra, 2), round(compra, 2)
+            compra = float(data2.get("compra", 0.0))
+            venta = float(data2.get("venta", 0.0))
+            if compra > 0 and venta > 0:
+                return round(venta, 2), round(compra, 2)
+            
+            promedio = float(data2.get("promedio", 0.0))
+            if promedio > 0:
+                # Estimación de spread del 1.5% si la API devuelve precio único
+                return round(promedio * 1.0075, 2), round(promedio * 0.9925, 2)
     except Exception as e:
         logging.error(f"Error Fuente 2 DolarApi: {e}")
-
-    # Fuente 3: Exchangerate API (Respaldo final)
-    try:
-        url3 = "https://open.er-api.com/v6/latest/USD"
-        res3 = requests.get(url3, headers=headers, timeout=8)
-        if res3.status_code == 200:
-            rates = res3.json().get("rates", {})
-            ves = float(rates.get("VES", 0.0))
-            if ves > 0:
-                return round(ves, 2), round(ves, 2)
-    except Exception as e:
-        logging.error(f"Error Fuente 3 OpenER: {e}")
 
     return 0.0, 0.0
 
@@ -63,7 +57,7 @@ def get_venezuela_time():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🤖 *Bot Binance P2P activo*\n\n"
-        "Envía `/status` para consultar los precios actualizados.",
+        "Envía `/status` para consultar los precios y el spread actualizado.",
         parse_mode="Markdown"
     )
 
@@ -74,22 +68,29 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sell_p, buy_p = get_p2p_price()
 
         if sell_p > 0 and buy_p > 0:
+            # Cálculo del Spread (diferencia bruta y porcentaje)
+            spread_ves = round(abs(sell_p - buy_p), 2)
+            spread_porcentaje = round((spread_ves / sell_p) * 100, 2)
+            
             hora_ve = get_venezuela_time()
+            
             respuesta = (
                 f"📊 *PRECIOS BINANCE P2P*\n"
                 f"──────────────────────────────\n"
                 f"🟢 *Comprar USDT (Venta):* `{sell_p} VES`\n"
                 f"🔴 *Vender USDT (Recompra):* `{buy_p} VES`\n"
+                f"──────────────────────────────\n"
+                f"📐 *Spread:* `{spread_ves} VES` (`{spread_porcentaje}%`)\n"
                 f"🏛️ *Método:* `Banco de Venezuela / P2P`\n"
                 f"──────────────────────────────\n"
                 f"⏰ *Hora Venezuela:* `{hora_ve}`"
             )
             await msg_wait.edit_text(respuesta, parse_mode="Markdown")
         else:
-            await msg_wait.edit_text("❌ Servidores de consulta ocupados. Intenta de nuevo en unos segundos.")
+            await msg_wait.edit_text("❌ Servidores ocupados. Intenta de nuevo en unos segundos.")
     except Exception as e:
         logging.error(f"Error en el comando status: {e}")
-        await update.message.reply_text("⚠️ Ocurrió un error al procesar la orden.")
+        await update.message.reply_text("⚠️ Ocurrió un error al procesar la solicitud.")
 
 def main():
     if not TELEGRAM_BOT_TOKEN:
