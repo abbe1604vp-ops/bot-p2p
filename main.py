@@ -101,16 +101,22 @@ async def monitor_market(app: Application):
                 )
                 await asyncio.sleep(120)
 
-def main():
+async def main():
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("status", status))
 
-    loop = asyncio.get_event_loop()
-    loop.create_task(monitor_market(app))
+    # Iniciar la tarea en segundo plano del monitoreo
+    asyncio.create_task(monitor_market(app))
 
     print("Bot corriendo correctamente...")
-    app.run_polling()
+    
+    # Iniciar el bot de Telegram
+    async with app:
+        await app.start()
+        await app.updater.start_polling()
+        # Mantener el proceso activo en Render
+        await asyncio.Event().wait()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
