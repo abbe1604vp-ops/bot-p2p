@@ -8,7 +8,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 # --- CONFIGURACIÓN ---
-TELEGRAM_BOT_TOKEN = "6327813571:AAEAE3krNicCNiB3f7Ve8N9SMF52BchmClY"
+TELEGRAM_BOT_TOKEN = "6327813571:AAGcRK1xNEVy9xqC2SHqQxZiK7I1sOzq89I"
 CHAT_ID_NOTIFICACIONES = None
 
 FIAT = "VES"
@@ -22,7 +22,7 @@ CSV_FILE = "historial_p2p.csv"
 # Zona horaria Venezuela (UTC-4)
 VET = timezone(timedelta(hours=-4))
 
-# Memoria temporal para cálculos de tendencia y puntos óptimos (máximo 720 lecturas = 24h)
+# Memoria temporal (hasta 720 lecturas = 24h)
 PRICE_HISTORY = deque(maxlen=720)
 
 logging.basicConfig(level=logging.INFO)
@@ -75,23 +75,26 @@ def calculate_arbitrage():
         "spread_net": spread_net
     }
 
-def calculate_trend():
-    if len(PRICE_HISTORY) < 3:
-        return "⏳ Analizando mercado (acumulando datos...)", 0.0
+def get_market_bias():
+    """Calcula el sesgo y comportamiento del mercado basado en fluctuaciones recientes."""
+    if len(PRICE_HISTORY) < 5:
+        return "⏳ Analizando flujo de mercado..."
 
-    first_sell = PRICE_HISTORY[0]["sell"]
-    last_sell = PRICE_HISTORY[-1]["sell"]
-    diff_pct = ((last_sell - first_sell) / first_sell) * 100
+    recent_sells = [p["sell"] for p in list(PRICE_HISTORY)[-10:]]
+    diff_pct = ((recent_sells[-1] - recent_sells[0]) / recent_sells[0]) * 100
 
-    if diff_pct >= 0.2:
-        return f"🚀 ALCISTA (+{diff_pct:.2f}%)", diff_pct
-    elif diff_pct <= -0.2:
-        return f"📉 BAJISTA ({diff_pct:.2f}%)", diff_pct
+    if diff_pct >= 0.3:
+        return "🚀 ALCISTA FUERTE (Presión al alza)"
+    elif diff_pct >= 0.1:
+        return "↗️ LATERAL CON SESGO ALCISTA"
+    elif diff_pct <= -0.3:
+        return "📉 BAJISTA ACELERADO (Corrección activa)"
+    elif diff_pct <= -0.1:
+        return "↘️ LATERAL CON SESGO BAJISTA"
     else:
-        return f"➡️ LATERAL ({diff_pct:+.2f}%)", diff_pct
+        return "➡️ LATERAL ESTABLE (En rango)"
 
 def get_market_signals(current_buy, current_sell):
-    """Calcula máximos/mínimos diarios y determina si estamos en punto óptimo."""
     if len(PRICE_HISTORY) < 5:
         return None
 
@@ -102,10 +105,8 @@ def get_market_signals(current_buy, current_sell):
     min_buy = min(buys)
 
     signal = "NEUTRAL"
-    # Si el precio de venta actual está dentro del 0.1% del máximo del día
     if current_sell >= max_sell * 0.999:
         signal = "PUNTO_VENTA_OPTIMO"
-    # Si el precio de compra está cerca del mínimo del día
     elif current_buy <= min_buy * 1.001:
         signal = "PUNTO_RECOMPRA_OPTIMO"
 
@@ -143,85 +144,92 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global CHAT_ID_NOTIFICACIONES
     CHAT_ID_NOTIFICACIONES = update.effective_chat.id
     await update.message.reply_text(
-        f"🤖 **Bot de Arbitraje y Señales P2P Activado**\n\n"
-        f"Monitoreando: **{ASSET}/{FIAT}**\n"
-        f"Frecuencia: **Cada 2 minutos**\n"
-        f"Alertas de señales y spread activadas.\n\n"
-        f"Comandos:\n"
-        f"/status - Estado del mercado y señales\n"
-        f"/senales - Análisis de máximos, mínimos y puntos óptimos\n"
-        f"/historial - Registro de datos"
+        f"🤖 *ARBITRAJE PRO — BOT ACTIVO*\n\n"
+        f"Par: *{ASSET}/{FIAT}*\n"
+        f"Motor analítico estilo ArBit inicializado.\n\n"
+        f"📋 *Comandos Principales:*\n"
+        f"• /status — Panel general del mercado\n"
+        f"• /senales — Puntos óptimos y sesgo actual\n"
+        f"• /historial — Registro de lecturas activas",
+        parse_mode="Markdown"
     )
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     res = calculate_arbitrage()
     if not res:
-        await update.message.reply_text("⚠️ Error al obtener precios de Binance P2P.")
+        await update.message.reply_text("⚠️ Error al conectar con Binance P2P.")
         return
 
-    trend_str, _ = calculate_trend()
+    bias = get_market_bias()
     signals = get_market_signals(res["buy"], res["sell"])
+    
+    max_s = signals['max_sell'] if signals else res['sell']
+    min_b = signals['min_buy'] if signals else res['buy']
 
     msg = (
-        f"📊 **Binance P2P ({ASSET}/{FIAT})**\n\n"
-        f"🔴 **Venta (P2P):** `{res['sell']:.2f} {FIAT}`\n"
-        f"🟢 **Compra (P2P):** `{res['buy']:.2f} {FIAT}`\n\n"
-        f"📈 **Spread Bruto:** `{res['spread_gross']:.2f}%`\n"
-        f"💵 **Margen Neto:** `{res['spread_net']:.2f}%`\n\n"
-        f"📊 **Tendencia:** {trend_str}\n"
+        f"📊 *PANEL DE MERCADO P2P ({ASSET}/{FIAT})*\n"
+        f"──────────────────────────────\n"
+        f"🔴 *Venta (P2P):* `{res['sell']:.2f} {FIAT}`\n"
+        f"🟢 *Compra (P2P):* `{res['buy']:.2f} {FIAT}`\n\n"
+        f"📈 *Spread Bruto:* `{res['spread_gross']:.2f}%`\n"
+        f"💵 *Margen Neto:* `{res['spread_net']:.2f}%`\n"
+        f"──────────────────────────────\n"
+        f"📌 *Sesgo Actual:* {bias}\n"
+        f"🔝 *Máximo del día:* `{max_s:.2f} {FIAT}`\n"
+        f"🔻 *Mínimo del día:* `{min_b:.2f} {FIAT}`\n"
+        f"📁 *Registros:* `{len(PRICE_HISTORY)} lecturas`"
     )
-
-    if signals:
-        if signals["signal"] == "PUNTO_VENTA_OPTIMO":
-            msg += "\n🔴 **¡PUNTO DE VENTA ÓPTIMO DETECTADO!** ⚡"
-        elif signals["signal"] == "PUNTO_RECOMPRA_OPTIMO":
-            msg += "\n🟢 **¡PUNTO DE RECOMPRA ÓPTIMO DETECTADO!** ⚡"
-
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 async def senales(update: Update, context: ContextTypes.DEFAULT_TYPE):
     res = calculate_arbitrage()
     if not res:
-        await update.message.reply_text("⚠️ Error al obtener precios.")
+        await update.message.reply_text("⚠️ Error al procesar precios.")
         return
 
     signals = get_market_signals(res["buy"], res["sell"])
+    bias = get_market_bias()
+    
     if not signals:
-        await update.message.reply_text("⏳ Acumulando suficientes datos para generar señales completas (mínimo 10 min)...")
+        await update.message.reply_text("⏳ Recopilando datos de tendencia (espera unos minutos)...")
         return
 
-    trend_str, _ = calculate_trend()
-
-    header = "🎯 **ANÁLISIS DE SEÑALES Y PUNTOS ÓPTIMOS**\n\n"
+    sig_header = "🔍 *ANÁLISIS TÉCNICO Y SEÑALES*"
+    action_rec = "Mantener posición / Monitorear"
+    
     if signals["signal"] == "PUNTO_VENTA_OPTIMO":
-        header = "🔴 **PUNTO DE VENTA ÓPTIMO — Confirmado** ⚡\n\n"
+        sig_header = "🔴 *PUNTO DE VENTA ÓPTIMO — Confirmado*"
+        action_rec = "¡VENDER AHORA (Zona de resistencia)!"
     elif signals["signal"] == "PUNTO_RECOMPRA_OPTIMO":
-        header = "🟢 **PUNTO DE RECOMPRA ÓPTIMO — Confirmado** ⚡\n\n"
+        sig_header = "🟢 *PUNTO DE RECOMPRA ÓPTIMO — Confirmado*"
+        action_rec = "¡RECOMPRAR AHORA (Zona de soporte)!"
 
     msg = (
-        f"{header}"
-        f"🔝 **Pico máximo del día:** `{signals['max_sell']:.2f} {FIAT}`\n"
-        f"🔻 **Mínimo de compra:** `{signals['min_buy']:.2f} {FIAT}`\n\n"
-        f"📍 **Precio Actual Venta:** `{res['sell']:.2f} {FIAT}`\n"
-        f"📍 **Precio Actual Compra:** `{res['buy']:.2f} {FIAT}`\n\n"
-        f"📊 **Tendencia:** {trend_str}\n"
-        f"⚡ **Spread ejecutable:** `{res['spread_net']:.2f}%`"
+        f"{sig_header}\n"
+        f"──────────────────────────────\n"
+        f"🎯 *Recomendación:* `{action_rec}`\n\n"
+        f"📉 *Comportamiento:* {bias}\n"
+        f"🔹 *Precio Actual Venta:* `{res['sell']:.2f} {FIAT}`\n"
+        f"🔹 *Precio Actual Compra:* `{res['buy']:.2f} {FIAT}`\n\n"
+        f"📊 *Spread Ejecutable:* `{res['spread_net']:.2f}%`\n"
+        f"⏰ *Hora Local VET:* `{datetime.now(VET).strftime('%I:%M %p')}`"
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 async def historial(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not PRICE_HISTORY:
-        await update.message.reply_text("Aún no hay suficiente historial acumulado.")
+        await update.message.reply_text("Aún no hay historial suficiente.")
         return
         
-    primer_registro = PRICE_HISTORY[0]['time'].strftime("%I:%M %p")
-    ultimo_registro = PRICE_HISTORY[-1]['time'].strftime("%I:%M %p")
+    p_ini = PRICE_HISTORY[0]['time'].strftime("%I:%M %p")
+    p_fin = PRICE_HISTORY[-1]['time'].strftime("%I:%M %p")
     
     msg = (
-        f"📁 **Historial acumulado**\n\n"
-        f"🔹 **Lecturas:** {len(PRICE_HISTORY)}\n"
-        f"🔹 **Desde:** {primer_registro}\n"
-        f"🔹 **Hasta:** {ultimo_registro}"
+        f"📁 *ESTADÍSTICAS DE HISTORIAL*\n"
+        f"──────────────────────────────\n"
+        f"• *Total Lecturas:* `{len(PRICE_HISTORY)}`\n"
+        f"• *Rango de Tiempo:* `{p_ini} - {p_fin}`\n"
+        f"• *Archivo:* `historial_p2p.csv` (Activo)"
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
 
@@ -233,11 +241,11 @@ async def monitor_market(app: Application):
         if res:
             save_to_history(res)
             signals = get_market_signals(res["buy"], res["sell"])
+            bias = get_market_bias()
 
             if CHAT_ID_NOTIFICACIONES and signals:
                 sig_type = signals["signal"]
                 
-                # Enviar alerta automática cuando se detecte un punto óptimo nuevo
                 if sig_type in ["PUNTO_VENTA_OPTIMO", "PUNTO_RECOMPRA_OPTIMO"] and sig_type != last_signal_sent:
                     last_signal_sent = sig_type
                     
@@ -245,12 +253,14 @@ async def monitor_market(app: Application):
                     action_txt = "¡VENDER AHORA!" if sig_type == "PUNTO_VENTA_OPTIMO" else "¡RECOMPRAR AHORA!"
                     
                     alert_msg = (
-                        f"{emoji_sig} **{sig_type.replace('_', ' ')}**\n"
-                        f"👉 **Recomendación:** `{action_txt}`\n\n"
-                        f"📍 **Venta actual:** `{res['sell']:.2f} {FIAT}`\n"
-                        f"📍 **Compra actual:** `{res['buy']:.2f} {FIAT}`\n"
-                        f"🔝 **Pico máximo:** `{signals['max_sell']:.2f} {FIAT}`\n\n"
-                        f"⚡ **Spread Neto:** `{res['spread_net']:.2f}%`"
+                        f"{emoji_sig} *ALERTA DE OPORTUNIDAD P2P*\n"
+                        f"──────────────────────────────\n"
+                        f"👉 *Acción:* `{action_txt}`\n"
+                        f"📌 *Sesgo:* {bias}\n\n"
+                        f"📍 *Venta:* `{res['sell']:.2f} {FIAT}`\n"
+                        f"📍 *Compra:* `{res['buy']:.2f} {FIAT}`\n"
+                        f"🔝 *Máximo:* `{signals['max_sell']:.2f} {FIAT}`\n\n"
+                        f"⚡ *Spread Neto:* `{res['spread_net']:.2f}%`"
                     )
                     await app.bot.send_message(
                         chat_id=CHAT_ID_NOTIFICACIONES, 
@@ -269,7 +279,7 @@ async def main():
 
     asyncio.create_task(monitor_market(app))
 
-    print("Bot corriendo con Algoritmo de Señales...")
+    print("Bot con formato visual avanzado y sesgo activo...")
     
     async with app:
         await app.start()
