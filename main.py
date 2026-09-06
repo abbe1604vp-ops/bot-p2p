@@ -372,3 +372,122 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import io
+from datetime import datetime, timedelta
+
+# --- 1. GRÁFICO EN TIEMPO REAL ---
+def generate_realtime_chart():
+    """Genera la gráfica del comportamiento real acumulado hasta el momento."""
+    if len(PRICE_HISTORY) < 2:
+        return None
+
+    times = [p["time"].strftime("%I:%M %p") for p in PRICE_HISTORY]
+    sells = [p["sell"] for p in PRICE_HISTORY]
+    buys = [p["buy"] for p in PRICE_HISTORY]
+
+    plt.style.use('dark_background')
+    fig, ax = plt.subplots(figsize=(10, 5))
+    fig.patch.set_facecolor('#0b0e14')
+    ax.set_facecolor('#131722')
+
+    ax.plot(times, sells, label='Tasa Venta Real', color='#00e676', linewidth=2)
+    ax.plot(times, buys, label='Tasa Recompra Real', color='#ff5252', linewidth=2)
+    ax.fill_between(times, buys, sells, color='#00e676', alpha=0.08)
+
+    ax.set_title("📈 MERCADO EN TIEMPO REAL (USDT/VES)", color='#00f2fe', fontsize=12, fontweight='bold')
+    ax.set_ylabel("VES / USDT", color='#848e9c')
+    ax.grid(True, linestyle=':', alpha=0.2)
+    ax.legend(loc='upper left', facecolor='#1e222d', edgecolor='none')
+
+    step = max(1, len(times) // 6)
+    ax.set_xticks(range(0, len(times), step))
+    ax.set_xticklabels([times[i] for i in range(0, len(times), step)], rotation=30, ha='right')
+
+    plt.tight_layout()
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=150, facecolor=fig.get_facecolor())
+    buf.seek(0)
+    plt.close(fig)
+    return buf
+
+# --- 2. GRÁFICO PREDICTIVO ---
+def generate_predictive_chart():
+    """Genera una proyección estimada para el resto del día basada en la tendencia actual."""
+    if len(PRICE_HISTORY) < 5:
+        return None
+
+    sells = np.array([p["sell"] for p in PRICE_HISTORY])
+    buys = np.array([p["buy"] for p in PRICE_HISTORY])
+    x_real = np.arange(len(sells))
+
+    # Ajuste de tendencia lineal (Regresión)
+    slope_sell, intercept_sell = np.polyfit(x_real, sells, 1)
+    slope_buy, intercept_buy = np.polyfit(x_real, buys, 1)
+
+    # Proyección a futuro (siguientes 12 horas / 360 lecturas)
+    future_steps = 360
+    x_future = np.arange(len(sells), len(sells) + future_steps)
+
+    proj_sell = slope_sell * x_future + intercept_sell
+    proj_buy = slope_buy * x_future + intercept_buy
+
+    # Volatilidad estimada
+    std_sell = np.std(sells) if np.std(sells) > 0 else 0.5
+
+    # Construcción de eje de tiempo proyectado
+    last_time = PRICE_HISTORY[-1]["time"]
+    time_future = [(last_time + timedelta(minutes=2 * i)).strftime("%I:%M %p") for i in range(1, future_steps + 1)]
+
+    plt.style.use('dark_background')
+    fig, ax = plt.subplots(figsize=(10, 5))
+    fig.patch.set_facecolor('#0b0e14')
+    ax.set_facecolor('#131722')
+
+    # Líneas proyectadas
+    ax.plot(time_future, proj_sell, color='#00e676', linestyle='--', label='Proyección Venta', linewidth=1.5)
+    ax.plot(time_future, proj_buy, color='#ff5252', linestyle='--', label='Proyección Recompra', linewidth=1.5)
+
+    # Banda de incertidumbre/esperanza
+    ax.fill_between(time_future, proj_sell - std_sell, proj_sell + std_sell, color='#00e676', alpha=0.1, label='Canal de Volatilidad')
+
+    ax.set_title("🔮 PROYECTO Y TENDENCIA PREDICTIVA DEL DÍA", color='#ffd600', fontsize=12, fontweight='bold')
+    ax.set_ylabel("VES / USDT", color='#848e9c')
+    ax.grid(True, linestyle=':', alpha=0.2)
+    ax.legend(loc='upper left', facecolor='#1e222d', edgecolor='none')
+
+    step = max(1, len(time_future) // 6)
+    ax.set_xticks(range(0, len(time_future), step))
+    ax.set_xticklabels([time_future[i] for i in range(0, len(time_future), step)], rotation=30, ha='right')
+
+    plt.tight_layout()
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=150, facecolor=fig.get_facecolor())
+    buf.seek(0)
+    plt.close(fig)
+    return buf
+
+# --- COMANDO EN TELEGRAM PARA ENVIAR AMBOS GRÁFICOS ---
+async def grafico(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg_wait = await update.message.reply_text("📊 Procesando análisis y generando gráficos...")
+
+    img_real = generate_realtime_chart()
+    img_pred = generate_predictive_chart()
+
+    if img_real and img_pred:
+        await update.message.reply_photo(
+            photo=img_real,
+            caption="📈 *1. Gráfico Real del Mercado (Lecturas acumuladas)*",
+            parse_mode="Markdown"
+        )
+        await update.message.reply_photo(
+            photo=img_pred,
+            caption="🔮 *2. Proyección Predictiva Estimada (Tendencia y Canal)*",
+            parse_mode="Markdown"
+        )
+        await msg_wait.delete()
+    else:
+        await msg_wait.edit_text("⏳ Se necesitan al menos 5 lecturas acumuladas para realizar el análisis y la proyección.")
