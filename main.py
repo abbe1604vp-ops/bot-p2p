@@ -1,13 +1,11 @@
-Here is the token for bot CONSUMO PROPIO @ConsumoPropioBot:
-
-6327813571:AAGcRK1xNEVy9xqC2SHqQximport asyncio
+import asyncio
 import logging
 import requests
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
-6327813571:AAGcRK1xNEVy9xqC2SHqQximport asyncio
+
 # --- CONFIGURACIÓN ---
-TELEGRAM_BOT_TOKEN = "TU_TOKEN_DE_BOTFATHER_AQUI"
+TELEGRAM_BOT_TOKEN = "6327813571:AAGcRK1xNEVy9xqC2SHqQxZiK7I1sOzq89I"
 CHAT_ID_NOTIFICACIONES = None
 
 FIAT = "VES"            # Moneda local (VES para Bolívares)
@@ -115,4 +113,4 @@ def main():
     app.run_polling()
 
 if name == "main":
-    main()ZIk7I1sQzq09I
+    main()
