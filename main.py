@@ -5,7 +5,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 # --- CONFIGURACIÓN ---
-TELEGRAM_BOT_TOKEN = "6327813571:AAGcRK1xNEVy9xqC2SHqQxZIk7I1sQzq09I"
+TELEGRAM_BOT_TOKEN = "6327813571:AAGG9YW2iaKW9A7tsDzXTi3ka5-uaThkQd0"
 CHAT_ID_NOTIFICACIONES = None
 
 FIAT = "VES"            # Moneda local (VES para Bolívares)
