@@ -3,7 +3,7 @@ import logging
 import requests
 from datetime import datetime, timedelta, timezone
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # Configuración de Logs
 logging.basicConfig(
@@ -51,7 +51,7 @@ def get_venezuela_time():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 *Bot Binance P2P activos*\n\n"
+        "🤖 *Bot Binance P2P activo*\n\n"
         "Envía `/status` para consultar los precios actualizados.",
         parse_mode="Markdown"
     )
@@ -75,22 +75,22 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             await msg_wait.edit_text(respuesta, parse_mode="Markdown")
         else:
-            await msg_wait.edit_text("❌ No se pudieron obtener los precios en este momento. Revisa los logs de Render.")
+            await msg_wait.edit_text("❌ No se pudieron obtener los precios en este momento.")
     except Exception as e:
         logging.error(f"Error en el comando status: {e}")
-        await update.message.reply_text("⚠️ Ocurrió un error inesperado al procesar la solicitud.")
+        await update.message.reply_text("⚠️ Ocurrió un error inesperado.")
 
 def main():
     if not TELEGRAM_BOT_TOKEN:
         logging.error("No se encontró TELEGRAM_BOT_TOKEN.")
         return
 
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("status", status))
 
     print("🚀 Bot iniciado correctamente...")
-    app.run_polling(drop_pending_updates=True)
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
