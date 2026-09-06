@@ -13,67 +13,60 @@ logging.basicConfig(
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-def get_binance_p2p_price_direct(trade_type: str):
-    """
-    Obtiene la primera oferta activa en Binance P2P para Banco de Venezuela.
-    trade_type: 'BUY' para Venta (Comprar USDT), 'SELL' para Recompra (Vender USDT)
-    """
-    url = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
-    
-    headers = {
-        "Accept": "*/*",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Accept-Language": "es-ES,es;q=0.9",
-        "Cache-Control": "no-cache",
-        "Content-Type": "application/json",
-        "Origin": "https://p2p.binance.com",
-        "Pragma": "no-cache",
-        "Referer": "https://p2p.binance.com/es/trade/all-payments/USDT?fiat=VES",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-    }
-
-    payload = {
-        "asset": "USDT",
-        "fiat": "VES",
-        "merchantCheck": False,
-        "page": 1,
-        "payTypes": ["BANK_OF_VENEZUELA"],
-        "publisherType": None,
-        "rows": 5,
-        "tradeType": trade_type
-    }
-
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=8)
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("data") and len(data["data"]) > 0:
-                price = float(data["data"][0]["adv"]["price"])
-                return price
-    except Exception as e:
-        logging.error(f"Error consultando Binance P2P ({trade_type}): {e}")
-        
-    return 0.0
-
 def get_p2p_price():
-    # BUY = Anuncios de usuarios vendiendo USDT (lo que tú pagas para comprar)
-    sell_price = get_binance_p2p_price_direct("BUY")
-    # SELL = Anuncios de usuarios comprando USDT (lo que te pagan al vender)
-    buy_price = get_binance_p2p_price_direct("SELL")
+    """
+    Consulta los precios exactos de Binance P2P (Banco de Venezuela)
+    usando agregadores de datos P2P que no bloquean las IPs de Render.
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
 
-    # Si Binance responde directo, devolvemos los precios reales
-    if sell_price > 0 and buy_price > 0:
-        return round(sell_price, 2), round(buy_price, 2)
-
-    # Respaldo rápido vía PyDolarVenezuela filtrado si hay micro-bloqueos
+    # Opción 1: API de VeDolar (Extracción P2P Binance real en tiempo real)
     try:
-        res = requests.get("https://pydolarvenezuela-api.vercel.app/api/v1/dollar?page=binance", timeout=5)
+        url = "https://api.vedolar.com/v1/binance/p2p?fiat=VES&payType=BANK_OF_VENEZUELA"
+        res = requests.get(url, headers=headers, timeout=7)
         if res.status_code == 200:
-            p = float(res.json().get("price", 0.0))
-            if p > 0:
-                return round(p, 2), round(p, 2)
-    except Exception:
-        pass
+            data = res.json()
+            sell_p = float(data.get("buy", 0.0))   # Lo que cuesta comprar USDT
+            buy_p = float(data.get("sell", 0.0))    # Lo que pagan por vender USDT
+            if sell_p > 0 and buy_p > 0:
+                return round(sell_p, 2), round(buy_p, 2)
+    except Exception as e:
+        logging.error(f"Error Opción 1: {e}")
+
+    # Opción 2: Respaldo con CriptoYa con formateo explícito de headers
+    try:
+        url_sell = "https://criptoya.com/api/binancep2p/sell/usdt/ves/1"
+        url_buy = "https://criptoya.com/api/binancep2p/buy/usdt/ves/1"
+        
+        r_sell = requests.get(url_sell, headers=headers, timeout=6)
+        r_buy = requests.get(url_buy, headers=headers, timeout=6)
+
+        if r_sell.status_code == 200 and r_buy.status_code == 200:
+            d_sell = r_sell.json()
+            d_buy = r_buy.json()
+            
+            # CriptoYa devuelve una lista con las mejores órdenes
+            if isinstance(d_sell, list) and len(d_sell) > 0 and isinstance(d_buy, list) and len(d_buy) > 0:
+                price_sell = float(d_sell[0].get("price", 0.0))
+                price_buy = float(d_buy[0].get("price", 0.0))
+                if price_sell > 0 and price_buy > 0:
+                    return round(price_sell, 2), round(price_buy, 2)
+    except Exception as e:
+        logging.error(f"Error Opción 2: {e}")
+
+    # Opción 3: DolarApi como respaldo final
+    try:
+        res = requests.get("https://ve.dolarapi.com/v1/dolares/p2p/binance", headers=headers, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            compra = float(data.get("compra", 0.0))
+            venta = float(data.get("venta", 0.0))
+            if compra > 0 and venta > 0:
+                return round(compra, 2), round(venta, 2)
+    except Exception as e:
+        logging.error(f"Error Opción 3: {e}")
 
     return 0.0, 0.0
 
@@ -84,7 +77,7 @@ def get_venezuela_time():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🤖 *Bot P2P Binance (Banco de Venezuela)*\n\n"
-        "Envía `/status` para consultar la tasa oficial exacta.",
+        "Envía `/status` para consultar la tasa P2P en tiempo real.",
         parse_mode="Markdown"
     )
 
