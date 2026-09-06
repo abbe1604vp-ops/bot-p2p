@@ -5,7 +5,6 @@ from datetime import datetime, timedelta, timezone
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# Configuración de Logs
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -15,33 +14,45 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 def get_p2p_price():
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
     }
     
-    # Intento 1: API PyDolarVenezuela (Binance)
+    # Fuente 1: API Directa CriptoYa Binance P2P VES
     try:
-        url = "https://pydolarvenezuela-api.vercel.app/api/v1/dollar?page=binance"
-        res = requests.get(url, headers=headers, timeout=5)
+        url = "https://criptoya.com/api/binancep2p/usdt/ves/1"
+        res = requests.get(url, headers=headers, timeout=8)
         if res.status_code == 200:
             data = res.json()
-            price = float(data.get("price", 0.0))
-            if price > 0:
-                return round(price, 2), round(price, 2)
+            ask = float(data.get("ask", 0.0))  # Precio Venta / Comprar
+            bid = float(data.get("bid", 0.0))  # Precio Recompra / Vender
+            if ask > 0 and bid > 0:
+                return round(ask, 2), round(bid, 2)
     except Exception as e:
-        logging.error(f"Error en Fuente 1: {e}")
+        logging.error(f"Error Fuente 1 CriptoYa: {e}")
 
-    # Intento 2: API DolarApi (P2P Binance)
+    # Fuente 2: DolarApi Venezuela
     try:
         url2 = "https://ve.dolarapi.com/v1/dolares/p2p/binance"
-        res2 = requests.get(url2, headers=headers, timeout=5)
+        res2 = requests.get(url2, headers=headers, timeout=8)
         if res2.status_code == 200:
             data2 = res2.json()
-            compra = float(data2.get("compra", 0.0))
-            venta = float(data2.get("venta", 0.0))
-            if compra > 0 and venta > 0:
-                return round(compra, 2), round(venta, 2)
+            compra = float(data2.get("promedio", data2.get("compra", 0.0)))
+            if compra > 0:
+                return round(compra, 2), round(compra, 2)
     except Exception as e:
-        logging.error(f"Error en Fuente 2: {e}")
+        logging.error(f"Error Fuente 2 DolarApi: {e}")
+
+    # Fuente 3: Exchangerate API (Respaldo final)
+    try:
+        url3 = "https://open.er-api.com/v6/latest/USD"
+        res3 = requests.get(url3, headers=headers, timeout=8)
+        if res3.status_code == 200:
+            rates = res3.json().get("rates", {})
+            ves = float(rates.get("VES", 0.0))
+            if ves > 0:
+                return round(ves, 2), round(ves, 2)
+    except Exception as e:
+        logging.error(f"Error Fuente 3 OpenER: {e}")
 
     return 0.0, 0.0
 
@@ -69,16 +80,16 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"──────────────────────────────\n"
                 f"🟢 *Comprar USDT (Venta):* `{sell_p} VES`\n"
                 f"🔴 *Vender USDT (Recompra):* `{buy_p} VES`\n"
-                f"🏛️ *Método:* `Banco de Venezuela`\n"
+                f"🏛️ *Método:* `Banco de Venezuela / P2P`\n"
                 f"──────────────────────────────\n"
                 f"⏰ *Hora Venezuela:* `{hora_ve}`"
             )
             await msg_wait.edit_text(respuesta, parse_mode="Markdown")
         else:
-            await msg_wait.edit_text("❌ No se pudieron obtener los precios en este momento.")
+            await msg_wait.edit_text("❌ Servidores de consulta ocupados. Intenta de nuevo en unos segundos.")
     except Exception as e:
         logging.error(f"Error en el comando status: {e}")
-        await update.message.reply_text("⚠️ Ocurrió un error inesperado.")
+        await update.message.reply_text("⚠️ Ocurrió un error al procesar la orden.")
 
 def main():
     if not TELEGRAM_BOT_TOKEN:
