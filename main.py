@@ -14,78 +14,43 @@ logging.basicConfig(
 # --- VARIABLE DE ENTORNO ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# --- OBTENER PRECIOS P2P BINANCE (BANCO DE VENEZUELA) ---
+# --- OBTENER PRECIOS P2P BINANCE ---
 def get_p2p_price():
     """
-    Consulta Binance P2P directamente con headers de navegador.
-    Si falla, utiliza la API de PyDolarVenezuela como respaldo.
+    Obtiene los precios P2P de Binance (Compra y Venta)
+    usando DolarApi, optimizada para servidores Cloud sin bloqueo.
     """
-    url_binance = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
-    
     headers = {
-        "Accept": "*/*",
-        "Accept-Language": "es-ES,es;q=0.9",
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
     }
-
-    # 1. Intentar consulta directa a Binance P2P (Banco de Venezuela)
+    
     try:
-        # Tasa Venta (Comprar USDT con Banco de Venezuela)
-        payload_sell = {
-            "asset": "USDT",
-            "fiat": "VES",
-            "tradeType": "BUY",
-            "page": 1,
-            "rows": 5,
-            "payTypes": ["BANK_OF_VENEZUELA"]
-        }
-        # Tasa Recompra (Vender USDT con Banco de Venezuela)
-        payload_buy = {
-            "asset": "USDT",
-            "fiat": "VES",
-            "tradeType": "SELL",
-            "page": 1,
-            "rows": 5,
-            "payTypes": ["BANK_OF_VENEZUELA"]
-        }
+        # Endpoint directo P2P Binance en DolarApi
+        url = "https://ve.dolarapi.com/v1/dolares/p2p/binance"
+        res = requests.get(url, headers=headers, timeout=8)
 
-        res_sell = requests.post(url_binance, json=payload_sell, headers=headers, timeout=6)
-        res_buy = requests.post(url_binance, json=payload_buy, headers=headers, timeout=6)
+        if res.status_code == 200:
+            data = res.json()
+            sell_p = float(data.get("compra", 0.0))  # Precio para comprar USDT (Venta del anunciante)
+            buy_p = float(data.get("venta", 0.0))   # Precio para vender USDT (Compra del anunciante)
 
-        sell_p = 0.0
-        buy_p = 0.0
-
-        if res_sell.status_code == 200:
-            data_s = res_sell.json()
-            if data_s.get("data"):
-                sell_p = float(data_s["data"][0]["adv"]["price"])
-
-        if res_buy.status_code == 200:
-            data_b = res_buy.json()
-            if data_b.get("data"):
-                buy_p = float(data_b["data"][0]["adv"]["price"])
-
-        if sell_p > 0 and buy_p > 0:
-            return round(sell_p, 2), round(buy_p, 2)
+            if sell_p > 0 and buy_p > 0:
+                return round(sell_p, 2), round(buy_p, 2)
 
     except Exception as e:
-        logging.error(f"Error consultando Binance directo: {e}")
+        logging.error(f"Error consultando DolarApi Binance P2P: {e}")
 
-    # 2. Respaldo: API PyDolarVenezuela
+    # Respaldos adicionales si falla la primera opción
     try:
-        url_respaldo = "https://pydolarvenezuela-api.vercel.app/api/v1/dollar?page=binance"
-        res_resp = requests.get(url_respaldo, headers={"User-Agent": "Mozilla/5.0"}, timeout=6)
-        
-        if res_resp.status_code == 200:
-            data_r = res_resp.json()
-            base_price = float(data_r.get("price", 0.0))
-            if base_price > 0:
-                # Estimación de spread estándar si el respaldo devuelve tasa promedio
-                return round(base_price * 1.005, 2), round(base_price * 0.995, 2)
-
+        url_alt = "https://ve.dolarapi.com/v1/dolares/paralelo"
+        res_alt = requests.get(url_alt, headers=headers, timeout=8)
+        if res_alt.status_code == 200:
+            data_alt = res_alt.json()
+            promedio = float(data_alt.get("promedio", 0.0))
+            if promedio > 0:
+                return round(promedio * 1.005, 2), round(promedio * 0.995, 2)
     except Exception as e:
-        logging.error(f"Error consultando API de respaldo: {e}")
+        logging.error(f"Error en endpoint de respaldo: {e}")
 
     return 0.0, 0.0
 
@@ -97,13 +62,13 @@ def get_venezuela_time():
 # --- COMANDOS DE TELEGRAM ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 *Bot P2P Binance (Banco de Venezuela)*\n\n"
-        "Envía `/status` para consultar los precios actualizados de compra y venta.",
+        "🤖 *Bot P2P Binance (Venezuela)*\n\n"
+        "Envía `/status` para consultar los precios de compra y venta en tiempo real.",
         parse_mode="Markdown"
     )
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg_wait = await update.message.reply_text("🔄 Consultando Binance P2P (Banco de Venezuela)...")
+    msg_wait = await update.message.reply_text("🔄 Consultando Binance P2P...")
     
     sell_p, buy_p = get_p2p_price()
 
@@ -117,7 +82,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🟢 *Comprar USDT (Venta):* `{sell_p} VES`\n"
             f"🔴 *Vender USDT (Recompra):* `{buy_p} VES`\n"
             f"📐 *Spread / Diferencia:* `{spread} VES`\n"
-            f"🏛️ *Método:* `Banco de Venezuela`\n"
+            f"🏛️ *Método:* `Banco de Venezuela / General`\n"
             f"──────────────────────────────\n"
             f"⏰ *Hora Venezuela:* `{hora_ve}`"
         )
