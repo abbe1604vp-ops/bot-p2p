@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-# --- CONFIGURACIÓN DE LOGS ---
+# Configuración de Logs
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -14,33 +14,34 @@ logging.basicConfig(
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 def get_p2p_price():
-    """
-    Obtiene las tasas de Binance P2P desde el API libre de PyDolarVenezuela
-    diseñada para correr en servidores de la nube.
-    """
-    url = "https://pydolarvenezuela-api.vercel.app/api/v1/dollar?page=binance"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
-
+    
+    # Intento 1: API PyDolarVenezuela (Binance)
     try:
-        response = requests.get(url, headers=headers, timeout=10)
-        logging.info(f"Status Code: {response.status_code}")
-        
-        if response.status_code == 200:
-            data = response.json()
-            logging.info(f"Data recibida: {data}")
-            
-            # Extraer precio
+        url = "https://pydolarvenezuela-api.vercel.app/api/v1/dollar?page=binance"
+        res = requests.get(url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
             price = float(data.get("price", 0.0))
             if price > 0:
-                # Estimación de spread sobre tasa Binance oficial
-                sell_p = round(price, 2)
-                buy_p = round(price, 2)
-                return sell_p, buy_p
-
+                return round(price, 2), round(price, 2)
     except Exception as e:
-        logging.error(f"Error crítico consultando API: {e}")
+        logging.error(f"Error en Fuente 1: {e}")
+
+    # Intento 2: API DolarApi (P2P Binance)
+    try:
+        url2 = "https://ve.dolarapi.com/v1/dolares/p2p/binance"
+        res2 = requests.get(url2, headers=headers, timeout=5)
+        if res2.status_code == 200:
+            data2 = res2.json()
+            compra = float(data2.get("compra", 0.0))
+            venta = float(data2.get("venta", 0.0))
+            if compra > 0 and venta > 0:
+                return round(compra, 2), round(venta, 2)
+    except Exception as e:
+        logging.error(f"Error en Fuente 2: {e}")
 
     return 0.0, 0.0
 
@@ -50,35 +51,38 @@ def get_venezuela_time():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 *Bot P2P Binance (Banco de Venezuela)*\n\n"
-        "Envía `/status` para consultar la tasa P2P.",
+        "🤖 *Bot Binance P2P activos*\n\n"
+        "Envía `/status` para consultar los precios actualizados.",
         parse_mode="Markdown"
     )
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg_wait = await update.message.reply_text("🔄 Consultando Binance P2P...")
-    
-    sell_p, buy_p = get_p2p_price()
-
-    if sell_p > 0 and buy_p > 0:
-        hora_ve = get_venezuela_time()
+    try:
+        msg_wait = await update.message.reply_text("🔄 Consultando Binance P2P...")
         
-        respuesta = (
-            f"📊 *PRECIOS BINANCE P2P*\n"
-            f"──────────────────────────────\n"
-            f"🟢 *Comprar USDT (Venta):* `{sell_p} VES`\n"
-            f"🔴 *Vender USDT (Recompra):* `{buy_p} VES`\n"
-            f"🏛️ *Método:* `Binance P2P / BDV`\n"
-            f"──────────────────────────────\n"
-            f"⏰ *Hora Venezuela:* `{hora_ve}`"
-        )
-        await msg_wait.edit_text(respuesta, parse_mode="Markdown")
-    else:
-        await msg_wait.edit_text("❌ No se pudieron obtener los precios. Revisa los logs de Render para más detalle.")
+        sell_p, buy_p = get_p2p_price()
+
+        if sell_p > 0 and buy_p > 0:
+            hora_ve = get_venezuela_time()
+            respuesta = (
+                f"📊 *PRECIOS BINANCE P2P*\n"
+                f"──────────────────────────────\n"
+                f"🟢 *Comprar USDT (Venta):* `{sell_p} VES`\n"
+                f"🔴 *Vender USDT (Recompra):* `{buy_p} VES`\n"
+                f"🏛️ *Método:* `Banco de Venezuela`\n"
+                f"──────────────────────────────\n"
+                f"⏰ *Hora Venezuela:* `{hora_ve}`"
+            )
+            await msg_wait.edit_text(respuesta, parse_mode="Markdown")
+        else:
+            await msg_wait.edit_text("❌ No se pudieron obtener los precios en este momento. Revisa los logs de Render.")
+    except Exception as e:
+        logging.error(f"Error en el comando status: {e}")
+        await update.message.reply_text("⚠️ Ocurrió un error inesperado al procesar la solicitud.")
 
 def main():
     if not TELEGRAM_BOT_TOKEN:
-        logging.error("No se encontró la variable TELEGRAM_BOT_TOKEN.")
+        logging.error("No se encontró TELEGRAM_BOT_TOKEN.")
         return
 
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
@@ -86,7 +90,7 @@ def main():
     app.add_handler(CommandHandler("status", status))
 
     print("🚀 Bot iniciado correctamente...")
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
