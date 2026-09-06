@@ -44,28 +44,53 @@ try:
 except FileExistsError:
     pass
 
-def get_p2p_price(trade_type: str, fiat: str, asset: str) -> float:
-    payload = {
-        "fiat": fiat,
+import requests
+
+def get_p2p_price():
+    """Obtiene las mejores tasas reales de Venta y Compra en Binance P2P para Banco de Venezuela."""
+    url = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
+    headers = {
+        "Accept": "*/*",
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0"
+    }
+
+    # 1. Tasa de Venta (Lo que cobran los comerciantes por venderte USDT)
+    payload_sell = {
+        "asset": "USDT",
+        "fiat": "VES",
+        "tradeType": "BUY",  # En la API de Binance, BUY representa los anuncios de Venta para el usuario
         "page": 1,
         "rows": 5,
-        "tradeType": trade_type,
-        "asset": asset,
-        "countries": [],
-        "proMerchantAds": False,
-        "shieldMerchantAds": False,
-        "publisherType": None
+        "payTypes": ["BANK_OF_VENEZUELA"]
     }
-    headers = {"Content-Type": "application/json"}
-    
+
+    # 2. Tasa de Recompra (Lo que pagan los comerciantes por comprarte USDT)
+    payload_buy = {
+        "asset": "USDT",
+        "fiat": "VES",
+        "tradeType": "SELL", # En la API de Binance, SELL representa los anuncios de Recompra para el usuario
+        "page": 1,
+        "rows": 5,
+        "payTypes": ["BANK_OF_VENEZUELA"]
+    }
+
     try:
-        response = requests.post(BINANCE_P2P_URL, json=payload, headers=headers, timeout=10)
-        data = response.json()
-        if data.get("success") and data.get("data"):
-            return float(data["data"][0]["adv"]["price"])
+        # Petición para Venta
+        res_sell = requests.post(url, json=payload_sell, headers=headers, timeout=5)
+        data_sell = res_sell.json()
+        price_sell = float(data_sell["data"][0]["adv"]["price"]) if data_sell.get("data") else 0.0
+
+        # Petición para Recompra
+        res_buy = requests.post(url, json=payload_buy, headers=headers, timeout=5)
+        data_buy = res_buy.json()
+        price_buy = float(data_buy["data"][0]["adv"]["price"]) if data_buy.get("data") else 0.0
+
+        return round(price_sell, 2), round(price_buy, 2)
+
     except Exception as e:
-        logging.error(f"Error Binance P2P ({trade_type}): {e}")
-    return 0.0
+        logging.error(f"Error consultando Binance P2P: {e}")
+        return 0.0, 0.0
 
 def calculate_arbitrage():
     price_buy = get_p2p_price("BUY", FIAT, ASSET)
