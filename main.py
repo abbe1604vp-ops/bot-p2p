@@ -8,7 +8,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 # --- CONFIGURACIÓN ---
-TELEGRAM_BOT_TOKEN = "6327813571:AAEyxTi8Uun0sKuOKSgUfWjz69-6uTrnewM"
+TELEGRAM_BOT_TOKEN = "6327813571:AAGcRK1xNEVy9xqC2SHqQxZiK7I1sOzq89I"
 CHAT_ID_NOTIFICACIONES = None
 
 FIAT = "VES"
@@ -22,8 +22,8 @@ CSV_FILE = "historial_p2p.csv"
 # Zona horaria Venezuela (UTC-4)
 VET = timezone(timedelta(hours=-4))
 
-# Memoria temporal para cálculos rápidos de tendencia (máximo 100 registros)
-PRICE_HISTORY = deque(maxlen=100)
+# Memoria temporal para cálculos de tendencia y puntos óptimos (máximo 720 lecturas = 24h)
+PRICE_HISTORY = deque(maxlen=720)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -76,26 +76,49 @@ def calculate_arbitrage():
     }
 
 def calculate_trend():
-    """Analiza la tendencia comparando la lectura actual con lecturas anteriores."""
     if len(PRICE_HISTORY) < 3:
-        return "⏳ Analizando mercado (acumulando datos...)"
+        return "⏳ Analizando mercado (acumulando datos...)", 0.0
 
     first_sell = PRICE_HISTORY[0]["sell"]
     last_sell = PRICE_HISTORY[-1]["sell"]
     diff_pct = ((last_sell - first_sell) / first_sell) * 100
 
     if diff_pct >= 0.2:
-        return f"🚀 ALCISTA / SUBIENDO (+{diff_pct:.2f}%)"
+        return f"🚀 ALCISTA (+{diff_pct:.2f}%)", diff_pct
     elif diff_pct <= -0.2:
-        return f"📉 BAJISTA / CAYENDO ({diff_pct:.2f}%)"
+        return f"📉 BAJISTA ({diff_pct:.2f}%)", diff_pct
     else:
-        return f"➡️ LATERAL / ESTABLE ({diff_pct:+.2f}%)"
+        return f"➡️ LATERAL ({diff_pct:+.2f}%)", diff_pct
+
+def get_market_signals(current_buy, current_sell):
+    """Calcula máximos/mínimos diarios y determina si estamos en punto óptimo."""
+    if len(PRICE_HISTORY) < 5:
+        return None
+
+    sells = [p["sell"] for p in PRICE_HISTORY]
+    buys = [p["buy"] for p in PRICE_HISTORY]
+
+    max_sell = max(sells)
+    min_buy = min(buys)
+
+    signal = "NEUTRAL"
+    # Si el precio de venta actual está dentro del 0.1% del máximo del día
+    if current_sell >= max_sell * 0.999:
+        signal = "PUNTO_VENTA_OPTIMO"
+    # Si el precio de compra está cerca del mínimo del día
+    elif current_buy <= min_buy * 1.001:
+        signal = "PUNTO_RECOMPRA_OPTIMO"
+
+    return {
+        "max_sell": max_sell,
+        "min_buy": min_buy,
+        "signal": signal
+    }
 
 def save_to_history(data):
     now_vet = datetime.now(VET)
     timestamp_str = now_vet.strftime("%Y-%m-%d %H:%M:%S")
 
-    # Guardar en memoria activa
     PRICE_HISTORY.append({
         "time": now_vet,
         "buy": data["buy"],
@@ -103,7 +126,6 @@ def save_to_history(data):
         "spread_net": data["spread_net"]
     })
 
-    # Guardar en archivo CSV
     try:
         with open(CSV_FILE, mode='a', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
@@ -121,13 +143,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global CHAT_ID_NOTIFICACIONES
     CHAT_ID_NOTIFICACIONES = update.effective_chat.id
     await update.message.reply_text(
-        f"🤖 **Bot de Arbitraje P2P Activado**\n\n"
+        f"🤖 **Bot de Arbitraje y Señales P2P Activado**\n\n"
         f"Monitoreando: **{ASSET}/{FIAT}**\n"
-        f"Frecuencia de monitoreo y guardado histórico: **Cada 2 minutos**\n"
-        f"Alerta activa cuando el spread supere: **{MIN_SPREAD_ALERT}%**\n\n"
-        f"Comandos disponibles:\n"
-        f"/status - Ver precio actual y tendencia\n"
-        f"/historial - Muestra cantidad de lecturas registradas"
+        f"Frecuencia: **Cada 2 minutos**\n"
+        f"Alertas de señales y spread activadas.\n\n"
+        f"Comandos:\n"
+        f"/status - Estado del mercado y señales\n"
+        f"/senales - Análisis de máximos, mínimos y puntos óptimos\n"
+        f"/historial - Registro de datos"
     )
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -136,15 +159,53 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Error al obtener precios de Binance P2P.")
         return
 
-    trend = calculate_trend()
+    trend_str, _ = calculate_trend()
+    signals = get_market_signals(res["buy"], res["sell"])
+
     msg = (
         f"📊 **Binance P2P ({ASSET}/{FIAT})**\n\n"
-        f"🔴 **Compra (P2P):** {res['buy']:.2f} {FIAT}\n"
-        f"🟢 **Venta (P2P):** {res['sell']:.2f} {FIAT}\n\n"
-        f"📈 **Spread Bruto:** {res['spread_gross']:.2f}%\n"
-        f"💵 **Margen Neto:** {res['spread_net']:.2f}%\n\n"
-        f"📊 **Tendencia actual:** {trend}\n"
-        f"💾 **Registros guardados:** {len(PRICE_HISTORY)} lecturas"
+        f"🔴 **Venta (P2P):** `{res['sell']:.2f} {FIAT}`\n"
+        f"🟢 **Compra (P2P):** `{res['buy']:.2f} {FIAT}`\n\n"
+        f"📈 **Spread Bruto:** `{res['spread_gross']:.2f}%`\n"
+        f"💵 **Margen Neto:** `{res['spread_net']:.2f}%`\n\n"
+        f"📊 **Tendencia:** {trend_str}\n"
+    )
+
+    if signals:
+        if signals["signal"] == "PUNTO_VENTA_OPTIMO":
+            msg += "\n🔴 **¡PUNTO DE VENTA ÓPTIMO DETECTADO!** ⚡"
+        elif signals["signal"] == "PUNTO_RECOMPRA_OPTIMO":
+            msg += "\n🟢 **¡PUNTO DE RECOMPRA ÓPTIMO DETECTADO!** ⚡"
+
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+async def senales(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    res = calculate_arbitrage()
+    if not res:
+        await update.message.reply_text("⚠️ Error al obtener precios.")
+        return
+
+    signals = get_market_signals(res["buy"], res["sell"])
+    if not signals:
+        await update.message.reply_text("⏳ Acumulando suficientes datos para generar señales completas (mínimo 10 min)...")
+        return
+
+    trend_str, _ = calculate_trend()
+
+    header = "🎯 **ANÁLISIS DE SEÑALES Y PUNTOS ÓPTIMOS**\n\n"
+    if signals["signal"] == "PUNTO_VENTA_OPTIMO":
+        header = "🔴 **PUNTO DE VENTA ÓPTIMO — Confirmado** ⚡\n\n"
+    elif signals["signal"] == "PUNTO_RECOMPRA_OPTIMO":
+        header = "🟢 **PUNTO DE RECOMPRA ÓPTIMO — Confirmado** ⚡\n\n"
+
+    msg = (
+        f"{header}"
+        f"🔝 **Pico máximo del día:** `{signals['max_sell']:.2f} {FIAT}`\n"
+        f"🔻 **Mínimo de compra:** `{signals['min_buy']:.2f} {FIAT}`\n\n"
+        f"📍 **Precio Actual Venta:** `{res['sell']:.2f} {FIAT}`\n"
+        f"📍 **Precio Actual Compra:** `{res['buy']:.2f} {FIAT}`\n\n"
+        f"📊 **Tendencia:** {trend_str}\n"
+        f"⚡ **Spread ejecutable:** `{res['spread_net']:.2f}%`"
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
 
@@ -157,48 +218,58 @@ async def historial(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ultimo_registro = PRICE_HISTORY[-1]['time'].strftime("%I:%M %p")
     
     msg = (
-        f"📁 **Historial del Mercado (En memoria)**\n\n"
-        f"🔹 **Lecturas almacenadas:** {len(PRICE_HISTORY)}\n"
+        f"📁 **Historial acumulado**\n\n"
+        f"🔹 **Lecturas:** {len(PRICE_HISTORY)}\n"
         f"🔹 **Desde:** {primer_registro}\n"
-        f"🔹 **Hasta:** {ultimo_registro}\n\n"
-        f"El bot continúa registrando datos cada 2 minutos en el archivo `.csv`."
+        f"🔹 **Hasta:** {ultimo_registro}"
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 async def monitor_market(app: Application):
+    last_signal_sent = None
+
     while True:
         res = calculate_arbitrage()
         if res:
-            # Guardar histórico cada 2 minutos
             save_to_history(res)
-            
-            # Notificar si hay oportunidad de arbitraje
-            if CHAT_ID_NOTIFICACIONES and res["spread_net"] >= MIN_SPREAD_ALERT:
-                alert_msg = (
-                    f"🚀 **¡OPORTUNIDAD DE ARBITRAJE!**\n\n"
-                    f"🔹 **Comprar:** {res['buy']:.2f} {FIAT}\n"
-                    f"🔹 **Vender:** {res['sell']:.2f} {FIAT}\n\n"
-                    f"⚡ **Spread Neto:** `{res['spread_net']:.2f}%`\n"
-                    f"📊 **Tendencia:** {calculate_trend()}"
-                )
-                await app.bot.send_message(
-                    chat_id=CHAT_ID_NOTIFICACIONES, 
-                    text=alert_msg, 
-                    parse_mode="Markdown"
-                )
+            signals = get_market_signals(res["buy"], res["sell"])
 
-        # Intervalo de 120 segundos (2 minutos) para registrar precios
+            if CHAT_ID_NOTIFICACIONES and signals:
+                sig_type = signals["signal"]
+                
+                # Enviar alerta automática cuando se detecte un punto óptimo nuevo
+                if sig_type in ["PUNTO_VENTA_OPTIMO", "PUNTO_RECOMPRA_OPTIMO"] and sig_type != last_signal_sent:
+                    last_signal_sent = sig_type
+                    
+                    emoji_sig = "🔴" if sig_type == "PUNTO_VENTA_OPTIMO" else "🟢"
+                    action_txt = "¡VENDER AHORA!" if sig_type == "PUNTO_VENTA_OPTIMO" else "¡RECOMPRAR AHORA!"
+                    
+                    alert_msg = (
+                        f"{emoji_sig} **{sig_type.replace('_', ' ')}**\n"
+                        f"👉 **Recomendación:** `{action_txt}`\n\n"
+                        f"📍 **Venta actual:** `{res['sell']:.2f} {FIAT}`\n"
+                        f"📍 **Compra actual:** `{res['buy']:.2f} {FIAT}`\n"
+                        f"🔝 **Pico máximo:** `{signals['max_sell']:.2f} {FIAT}`\n\n"
+                        f"⚡ **Spread Neto:** `{res['spread_net']:.2f}%`"
+                    )
+                    await app.bot.send_message(
+                        chat_id=CHAT_ID_NOTIFICACIONES, 
+                        text=alert_msg, 
+                        parse_mode="Markdown"
+                    )
+
         await asyncio.sleep(120)
 
 async def main():
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("status", status))
+    app.add_handler(CommandHandler("senales", senales))
     app.add_handler(CommandHandler("historial", historial))
 
     asyncio.create_task(monitor_market(app))
 
-    print("Bot corriendo correctamente con guardado histórico...")
+    print("Bot corriendo con Algoritmo de Señales...")
     
     async with app:
         await app.start()
